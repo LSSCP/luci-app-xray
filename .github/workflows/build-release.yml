@@ -18,12 +18,10 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            sdk_url_path: https://downloads.openwrt.org/releases/25.12.1/targets/x86/64
-            sdk_name: -sdk-25.12.1-x86-64_
+            sdk_url: https://downloads.openwrt.org/releases/25.12.1/targets/x86/64/openwrt-sdk-25.12.1-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
 
           - arch: mipsel
-            sdk_url_path: https://downloads.openwrt.org/releases/25.12.1/targets/ramips/mt7621
-            sdk_name: -sdk-25.12.1-ramips-mt7621_
+            sdk_url: https://downloads.openwrt.org/releases/25.12.1/targets/ramips/mt7621/openwrt-sdk-25.12.1-ramips-mt7621_gcc-14.3.0_musl.Linux-x86_64.tar.zst
 
     steps:
       - name: Checkout
@@ -32,30 +30,25 @@ jobs:
       - name: Install Dependencies
         run: |
           DEBIAN_FRONTEND=noninteractive sudo apt-get update
-          sudo apt-get install -y ccache gettext libncurses5-dev xsltproc p7zip-full zstd
+          sudo apt-get install -y zstd build-essential ccache gettext libncurses5-dev xsltproc
 
       - name: Create SDK Dir
         run: echo "SDK_HOME=$(mktemp -d)" >> $GITHUB_ENV
 
-      - name: Download and Unpack SDK
+      - name: Download SDK
         run: |
           cd "$SDK_HOME"
-          wget -q -O - "${{ matrix.sdk_url_path }}/sha256sums" | grep "${{ matrix.sdk_name }}" > sha256sums.small
-          SDK_FILE=$(cat sha256sums.small | awk '{print $2}' | sed 's/*//g')
-          wget -q -O "$SDK_FILE" "${{ matrix.sdk_url_path }}/$SDK_FILE"
-          sha256sum -c sha256sums.small
+          wget -q "${{ matrix.sdk_url }}" -O sdk.tar.zst
 
-          zstd -cd "$SDK_FILE" | tar -xvf - --strip=1
-          rm -f "$SDK_FILE" sha256sums.small
+      - name: Unpack SDK
+        run: |
+          zstd -cd "$SDK_HOME/sdk.tar.zst" | tar -C "$SDK_HOME" --strip=1 -xvf -
 
-      - name: Fix feeds.conf
+      - name: Prepare feeds
         run: |
           cd "$SDK_HOME"
           cp feeds.conf.default feeds.conf
-          sed -i 's#git.openwrt.org/openwrt/openwrt#github.com/openwrt/openwrt#' feeds.conf
-          sed -i 's#git.openwrt.org/feed/packages#github.com/openwrt/packages#' feeds.conf
-          sed -i 's#git.openwrt.org/project/luci#github.com/openwrt/luci#' feeds.conf
-          sed -i 's#git.openwrt.org/feed/telephony#github.com/openwrt/telephony#' feeds.conf
+          sed -i 's#git.openwrt.org#github.com#g' feeds.conf
 
       - name: Update feeds
         run: |
@@ -68,14 +61,14 @@ jobs:
           cd "$SDK_HOME"
           ln -s "${{ github.workspace }}" "package/$PACKAGE_NAME"
 
-      - name: Build
+      - name: Build package
         run: |
           cd "$SDK_HOME"
           make defconfig
           make package/$PACKAGE_NAME/clean
           make package/$PACKAGE_NAME/compile V=s
 
-      - name: Upload ipk
+      - name: Upload ipk files
         uses: actions/upload-artifact@v4
         with:
           name: ipk-${{ matrix.arch }}
