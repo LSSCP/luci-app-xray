@@ -27,52 +27,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
-          DEBIAN_FRONTEND=noninteractive sudo apt-get update
-          sudo apt-get install -y zstd build-essential ccache gettext libncurses5-dev xsltproc
+          sudo apt-get update
+          sudo apt-get install -y zstd build-essential libncurses5-dev python3
 
-      - name: Create SDK Dir
+      - name: Create temp dir
         run: echo "SDK_HOME=$(mktemp -d)" >> $GITHUB_ENV
 
       - name: Download SDK
         run: |
-          cd "$SDK_HOME"
-          wget -q "${{ matrix.sdk_url }}" -O sdk.tar.zst
+          wget -q -O "$SDK_HOME/sdk.tar.zst" "${{ matrix.sdk_url }}"
 
       - name: Unpack SDK
         run: |
-          zstd -cd "$SDK_HOME/sdk.tar.zst" | tar -C "$SDK_HOME" --strip=1 -xvf -
-
-      - name: Prepare feeds
-        run: |
-          cd "$SDK_HOME"
-          cp feeds.conf.default feeds.conf
-          sed -i 's#git.openwrt.org#github.com#g' feeds.conf
-
-      - name: Update feeds
-        run: |
-          cd "$SDK_HOME"
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          zstd -cd "$SDK_HOME/sdk.tar.zst" | tar -C "$SDK_HOME" --strip=1 -xf -
 
       - name: Link package
         run: |
-          cd "$SDK_HOME"
-          ln -s "${{ github.workspace }}" "package/$PACKAGE_NAME"
+          ln -s "${{ github.workspace }}" "$SDK_HOME/package/$PACKAGE_NAME"
 
       - name: Build package
         run: |
           cd "$SDK_HOME"
           make defconfig
-          make package/$PACKAGE_NAME/clean
-          make package/$PACKAGE_NAME/compile V=s
+          make package/$PACKAGE_NAME/compile V=s -j$(nproc)
 
-      - name: Upload ipk files
+      - name: Upload ipk
         uses: actions/upload-artifact@v4
         with:
           name: ipk-${{ matrix.arch }}
-          path: ${{ env.SDK_HOME }}/bin/packages/*/*/*.ipk
+          path: ${{ env.SDK_HOME }}/bin/packages/*.ipk
 
   release:
     name: Create Release & Upload All
@@ -89,25 +74,10 @@ jobs:
       - name: List files
         run: ls -lh ./output
 
-      - name: Create GitHub Release
+      - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           files: ./output/*.ipk
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  notify:
-    name: Notify Release Publish
-    runs-on: ubuntu-latest
-    needs: release
-    steps:
-      - name: Notify external service
-        run: |
-          if [ -n "${{ secrets.TRIGGER_URL }}" ]; then
-            curl -X POST \
-              -H "Content-Type: application/json" \
-              -H "Authorization: Bearer ${{ secrets.TRIGGER_TOKEN }}" \
-              -d '{"event":"release","repository":"${{ github.repository }}","ref":"${{ github.ref }}"}' \
-              "${{ secrets.TRIGGER_URL }}"
-          fi
