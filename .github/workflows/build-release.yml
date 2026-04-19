@@ -8,7 +8,6 @@ on:
 
 env:
   PACKAGE_NAME: luci-app-xray
-  CACHE_DIR: ~/cache
 
 jobs:
   build:
@@ -26,83 +25,57 @@ jobs:
             sdk_url_path: https://downloads.openwrt.org/releases/25.12.1/targets/ramips/mt7621
             sdk_name: -sdk-25.12.1-ramips-mt7621_
 
-    env:
-      SDK_URL_PATH: ${{ matrix.sdk_url_path }}
-      SDK_NAME: ${{ matrix.sdk_name }}
-      CCACHE_DIR: ~/.ccache
-      CONFIG_CCACHE: y
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Prepare Cache Key
-        id: cache_key
-        run: echo "timestamp=$(date +"%s")" >> $GITHUB_OUTPUT
-
-      - name: Setup Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.CACHE_DIR }}
-            ${{ env.CCACHE_DIR }}
-          key: openwrt-${{ matrix.arch }}-${{ env.PACKAGE_NAME }}-${{ steps.cache_key.outputs.timestamp }}
-          restore-keys: |
-            openwrt-${{ matrix.arch }}-${{ env.PACKAGE_NAME }}-
 
       - name: Install Dependencies
         run: |
           DEBIAN_FRONTEND=noninteractive sudo apt-get update
           sudo apt-get install -y ccache gettext libncurses5-dev xsltproc p7zip-full zstd
 
-      - name: Create Directories
+      - name: Create SDK Dir
+        run: echo "SDK_HOME=$(mktemp -d)" >> $GITHUB_ENV
+
+      - name: Download and Unpack SDK
         run: |
-          CACHE_DIR_SDK="$CACHE_DIR/sdk"
-          CACHE_DIR_DL="$CACHE_DIR/dl"
-          CACHE_DIR_FEEDS="$CACHE_DIR/feeds"
-          mkdir -p "$CACHE_DIR_SDK" "$CACHE_DIR_DL" "$CACHE_DIR_FEEDS"
-          echo "CACHE_DIR_SDK=$CACHE_DIR_SDK" >> $GITHUB_ENV
-          echo "CACHE_DIR_DL=$CACHE_DIR_DL" >> $GITHUB_ENV
-          echo "CACHE_DIR_FEEDS=$CACHE_DIR_FEEDS" >> $GITHUB_ENV
-          echo "SDK_HOME=$(mktemp -d)" >> $GITHUB_ENV
-
-      - name: Download and Unzip SDK
-        run: |
-          cd "$CACHE_DIR_SDK"
-          wget -q -O - "$SDK_URL_PATH/sha256sums" | grep -- "$SDK_NAME" > sha256sums.small
-          SDK_FILE=$(cat sha256sums.small | awk '{print $2}' | sed 's/*//g')
-          sha256sum -c sha256sums.small >/dev/null 2>&1 || wget -q -O "$SDK_FILE" "$SDK_URL_PATH/$SDK_FILE"
-          cd -
-
-          # 支持 zst 解压
-          zstd -cd "$CACHE_DIR_SDK/$SDK_FILE" | tar -C "$SDK_HOME" -xvf - --strip=1
-
           cd "$SDK_HOME"
-          rm -rf dl feeds
-          ln -s "$CACHE_DIR_DL" dl
-          ln -s "$CACHE_DIR_FEEDS" feeds
+          wget -q -O - "${{ matrix.sdk_url_path }}/sha256sums" | grep "${{ matrix.sdk_name }}" > sha256sums.small
+          SDK_FILE=$(cat sha256sums.small | awk '{print $2}' | sed 's/*//g')
+          wget -q -O "$SDK_FILE" "${{ matrix.sdk_url_path }}/$SDK_FILE"
+          sha256sum -c sha256sums.small
+
+          zstd -cd "$SDK_FILE" | tar -xvf - --strip=1
+          rm -f "$SDK_FILE" sha256sums.small
+
+      - name: Fix feeds.conf
+        run: |
+          cd "$SDK_HOME"
           cp feeds.conf.default feeds.conf
           sed -i 's#git.openwrt.org/openwrt/openwrt#github.com/openwrt/openwrt#' feeds.conf
           sed -i 's#git.openwrt.org/feed/packages#github.com/openwrt/packages#' feeds.conf
           sed -i 's#git.openwrt.org/project/luci#github.com/openwrt/luci#' feeds.conf
           sed -i 's#git.openwrt.org/feed/telephony#github.com/openwrt/telephony#' feeds.conf
-          cd -
 
-      - name: Update feeds and link package
+      - name: Update feeds
         run: |
           cd "$SDK_HOME"
           ./scripts/feeds update -a
-          ln -s "${{ github.workspace }}" "package/$PACKAGE_NAME"
           ./scripts/feeds install -a
 
-      - name: Build Package
+      - name: Link package
+        run: |
+          cd "$SDK_HOME"
+          ln -s "${{ github.workspace }}" "package/$PACKAGE_NAME"
+
+      - name: Build
         run: |
           cd "$SDK_HOME"
           make defconfig
           make package/$PACKAGE_NAME/clean
           make package/$PACKAGE_NAME/compile V=s
 
-      - name: Upload built ipk
+      - name: Upload ipk
         uses: actions/upload-artifact@v4
         with:
           name: ipk-${{ matrix.arch }}
