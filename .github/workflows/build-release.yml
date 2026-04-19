@@ -53,7 +53,7 @@ jobs:
       - name: Install Dependencies
         run: |
           DEBIAN_FRONTEND=noninteractive sudo apt-get update
-          sudo apt-get install -y ccache gettext libncurses5-dev xsltproc p7zip-full
+          sudo apt-get install -y ccache gettext libncurses5-dev xsltproc p7zip-full zstd
 
       - name: Create Directories
         run: |
@@ -73,7 +73,9 @@ jobs:
           SDK_FILE=$(cat sha256sums.small | awk '{print $2}' | sed 's/*//g')
           sha256sum -c sha256sums.small >/dev/null 2>&1 || wget -q -O "$SDK_FILE" "$SDK_URL_PATH/$SDK_FILE"
           cd -
-          7z x "$CACHE_DIR_SDK/$SDK_FILE" -so | tar -C "$SDK_HOME" -xvf - --strip=1
+
+          # 支持 zst 解压
+          zstd -cd "$CACHE_DIR_SDK/$SDK_FILE" | tar -C "$SDK_HOME" -xvf - --strip=1
 
           cd "$SDK_HOME"
           rm -rf dl feeds
